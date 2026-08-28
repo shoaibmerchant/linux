@@ -382,7 +382,17 @@ nxpwifi_cfg80211_set_power_mgmt(struct wiphy *wiphy,
 				struct net_device *dev,
 				bool enabled, int timeout)
 {
-	return 0;
+	struct nxpwifi_private *priv = nxpwifi_netdev_get_priv(dev);
+	u32 ps_mode;
+
+	if (timeout)
+		nxpwifi_dbg(priv->adapter, INFO,
+			    "info: ignore timeout value for IEEE Power Save\n");
+
+	ps_mode = enabled;
+
+	return nxpwifi_drv_set_power(priv, &ps_mode);
+	// return 0;
 }
 
 /*
@@ -3832,6 +3842,8 @@ int nxpwifi_register_cfg80211(struct nxpwifi_adapter *adapter)
 			WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL |
 			WIPHY_FLAG_HAS_CHANNEL_SWITCH |
 			WIPHY_FLAG_NETNS_OK;
+			// WIPHY_FLAG_NETNS_OK |
+			// WIPHY_FLAG_PS_ON_BY_DEFAULT;
 	wiphy->max_num_csa_counters = NXPWIFI_MAX_CSA_COUNTERS;
 
 #ifdef CONFIG_PM
