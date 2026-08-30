@@ -27,6 +27,7 @@
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_print.h>
+#include <drm/drm_self_refresh_helper.h>
 #include <drm/drm_vblank.h>
 
 #include "lcdif_drv.h"
@@ -427,6 +428,9 @@ static int lcdif_crtc_atomic_check(struct drm_crtc *crtc,
 	struct drm_device *drm = crtc->dev;
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
 									  crtc);
+	struct drm_crtc_state *old_crtc_state =
+		drm_atomic_get_old_crtc_state(state, crtc);
+
 	struct lcdif_crtc_state *lcdif_crtc_state = to_lcdif_crtc_state(crtc_state);
 	bool has_primary = crtc_state->plane_mask &
 			   drm_plane_mask(crtc->primary);
@@ -437,6 +441,24 @@ static int lcdif_crtc_atomic_check(struct drm_crtc *crtc,
 	u32 bus_format, bus_flags;
 	bool format_set = false, flags_set = false;
 	int ret, i;
+
+
+	/*
+	 * Disable self_refresh_active and force a modeset when
+	 * leaving self-refresh into inactive crtc.
+	 * This ensures the crtc can disable when in self-refresh
+	*/
+	if (old_crtc_state->self_refresh_active && !crtc_state->active) {
+		crtc_state->self_refresh_active = false;
+		crtc_state->mode_changed = true;
+	}
+
+
+	/*
+	 * Only enter self-refresh when CRTC was active in the old state
+	*/
+	if (crtc_state->self_refresh_active && !old_crtc_state->active)
+		crtc_state->self_refresh_active = false;
 
 	/* The primary plane has to be enabled when the CRTC is active. */
 	if (crtc_state->active && !has_primary)
@@ -534,6 +556,7 @@ static void lcdif_crtc_atomic_enable(struct drm_crtc *crtc,
 	struct drm_crtc_state *new_cstate = drm_atomic_get_new_crtc_state(state, crtc);
 	struct drm_plane_state *new_pstate = drm_atomic_get_new_plane_state(state,
 									    crtc->primary);
+
 	struct drm_display_mode *m = &lcdif->crtc.state->adjusted_mode;
 	struct drm_device *drm = lcdif->drm;
 	dma_addr_t paddr;
@@ -562,7 +585,16 @@ static void lcdif_crtc_atomic_disable(struct drm_crtc *crtc,
 {
 	struct lcdif_drm_private *lcdif = to_lcdif_drm_private(crtc->dev);
 	struct drm_device *drm = lcdif->drm;
+	struct drm_crtc_state *old_cstate =
+		drm_atomic_get_old_crtc_state(state, crtc);
+	bool from_self_refresh = old_cstate && old_cstate->self_refresh_active;
 	struct drm_pending_vblank_event *event;
+
+	/* When transitionning from disable state, LCDIFv3 is already suspended,
+	 * wake it up, it will be suspended back on this function's exit
+	*/
+	if (from_self_refresh)
+		pm_runtime_get_sync(drm->dev);
 
 	drm_crtc_vblank_off(crtc);
 
@@ -786,7 +818,27 @@ int lcdif_kms_init(struct lcdif_drm_private *lcdif)
 		return ret;
 
 	drm_crtc_helper_add(crtc, &lcdif_crtc_helper_funcs);
-	return drm_crtc_init_with_planes(lcdif->drm, crtc,
-					 &lcdif->planes.primary, NULL,
-					 &lcdif_crtc_funcs, NULL);
+	ret = drm_crtc_init_with_planes(lcdif->drm, crtc,
+					&lcdif->planes.primary, NULL,
+					&lcdif_crtc_funcs, NULL);
+	if (ret)
+		return ret;
+
+
+	/*
+	* LCDIFv3 is powered down on self-refresh, so vblank source
+	* stops. Adding this flag to avoid atomic helper warning about
+	* missing vblank during self-refresh
+	*/
+	crtc->no_vblank_in_self_refresh = true;
+
+	/*
+	 * Enable panel self-refresh init via helper
+	 */
+	ret = drm_self_refresh_helper_init(crtc);
+	if (ret)
+		drm_warn(lcdif->drm,
+			 "failed to initialize self-refresh helper: %d\n", ret);
+
+	return 0;
 }

@@ -25,6 +25,7 @@
 #include <drm/drm_mode_config.h>
 #include <drm/drm_module.h>
 #include <drm/drm_of.h>
+#include <drm/drm_self_refresh_helper.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
@@ -228,6 +229,8 @@ static void lcdif_unload(struct drm_device *drm)
 	struct lcdif_drm_private *lcdif = drm->dev_private;
 
 	pm_runtime_get_sync(drm->dev);
+
+	drm_self_refresh_helper_cleanup(&lcdif->crtc);
 
 	drm_crtc_vblank_off(&lcdif->crtc);
 

@@ -1290,10 +1290,10 @@ drm_atomic_helper_commit_crtc_disable(struct drm_device *dev, struct drm_atomic_
 		ret = drm_crtc_vblank_get(crtc);
 		/*
 		 * Self-refresh is not a true "disable"; ensure vblank remains
-		 * enabled.
+		 * enabled, unless the crtc sets no_vblank_in_self_refresh
 		 */
 		if (new_crtc_state->self_refresh_active)
-			WARN_ONCE(ret != 0,
+			WARN_ONCE(ret != 0 && !crtc->no_vblank_in_self_refresh,
 				  "driver disabled vblank in self-refresh\n");
 		else
 			WARN_ONCE(ret != -EINVAL,

@@ -25,6 +25,7 @@
 #include <video/mipi_display.h>
 
 #include <drm/bridge/samsung-dsim.h>
+#include <drm/drm_atomic.h>
 #include <drm/drm_panel.h>
 #include <drm/drm_print.h>
 
@@ -1678,6 +1679,26 @@ static void samsung_dsim_atomic_enable(struct drm_bridge *bridge,
 	dsi->state |= DSIM_STATE_VIDOUT_AVAILABLE;
 }
 
+static bool samsung_dsim_crtc_is_self_refresh(struct drm_bridge *bridge,
+					      struct drm_atomic_state *state)
+{
+	struct drm_encoder *encoder = bridge->encoder;
+	struct drm_crtc_state *new_crtc_state;
+	struct drm_crtc *crtc;
+
+	if (!encoder)
+		return false;
+
+	crtc = drm_atomic_get_old_crtc_for_encoder(state, encoder);
+	if (!crtc)
+		return false;
+
+	/* Use new crtc state to check if self_refresh_active is enabled */
+	new_crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+
+	return new_crtc_state && new_crtc_state->self_refresh_active;
+}
+
 static void samsung_dsim_atomic_disable(struct drm_bridge *bridge,
 					struct drm_atomic_state *state)
 {
@@ -1694,6 +1715,9 @@ static void samsung_dsim_atomic_post_disable(struct drm_bridge *bridge,
 					     struct drm_atomic_state *state)
 {
 	struct samsung_dsim *dsi = bridge_to_dsi(bridge);
+
+	if (samsung_dsim_crtc_is_self_refresh(bridge, state))
+		return;
 
 	dsi->state &= ~DSIM_STATE_ENABLED;
 	pm_runtime_put_sync(dsi->dev);
@@ -1766,6 +1790,13 @@ static int samsung_dsim_atomic_check(struct drm_bridge *bridge,
 {
 	struct samsung_dsim *dsi = bridge_to_dsi(bridge);
 	struct drm_display_mode *adjusted_mode = &crtc_state->adjusted_mode;
+
+	/*
+	 * Enable self-refresh aware for the display, making
+	 * the LCDIFv3 to power-down during SR, while the DSIM remains up
+	 * for DCS transfers
+	 */
+	conn_state->self_refresh_aware = true;
 
 	/*
 	 * The i.MX8M Mini/Nano glue logic between LCDIF and DSIM

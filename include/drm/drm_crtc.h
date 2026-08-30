@@ -1036,6 +1036,18 @@ struct drm_crtc {
 	bool enabled;
 
 	/**
+	 * @no_vblank_in_self_refresh:
+	 *
+	 * Indicates that this CRTC cannot keep its vblank
+	 * interrupt running while the display is in panel self-refresh, because
+	 * the driver powers the CRTC down on self-refresh entry (its vblank
+	 * source stops when the controller is disabled). It does not change
+	 * any behaviour; drivers that can keep vblank running during
+	 * self-refresh should leave it clear.
+	 */
+	bool no_vblank_in_self_refresh;
+
+	/**
 	 * @mode:
 	 *
 	 * Current mode timings. Should only be used by legacy drivers, atomic
