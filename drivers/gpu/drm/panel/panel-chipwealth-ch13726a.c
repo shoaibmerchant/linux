@@ -49,13 +49,46 @@ static inline struct ch13726a_panel *to_ch13726a_panel(struct drm_panel *panel)
 
 static void ch13726a_reset(struct ch13726a_panel *ctx)
 {
-	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
-	usleep_range(10000, 11000);
-	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-	usleep_range(10000, 11000);
-	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
-	usleep_range(10000, 11000);
+	// gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+	// usleep_range(10000, 11000);
+	// gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+	// usleep_range(10000, 11000);
+	// gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+	// usleep_range(10000, 11000);
+	gpiod_set_value_cansleep(ctx->reset_gpio, 0);	/* released */
+	msleep(5);
+	gpiod_set_value_cansleep(ctx->reset_gpio, 1);	/* assert reset */
+	msleep(20);
+	gpiod_set_value_cansleep(ctx->reset_gpio, 0);	/* release reset */
+	msleep(50);
 }
+
+static int ch13726a_wait_ready(struct ch13726a_panel *ctx)
+{
+	struct device *dev = &ctx->dsi->dev;
+	int i, ret;
+
+	u8 power_mode = 0;
+
+	for (i = 0; i < 20; i++) {
+
+		ret = mipi_dsi_dcs_read(ctx->dsi, MIPI_DCS_GET_POWER_MODE,
+					&power_mode, 1);
+		dev_info(dev, "power_mode poll %d: read=%d val=0x%02x\n",
+			 i, ret, power_mode);
+		if (ret == 1 && (power_mode & 0x80)) {   /* booster on */
+			dev_info(dev,
+				 "panel ready after %d ms (power_mode=0x%02x)\n",
+				 i * 10, power_mode);
+			return 0;
+		}
+		msleep(10);
+	}
+
+	dev_warn(dev, "panel not ready (last read=%d val=0x%02x)\n", ret, power_mode);
+	return -ETIMEDOUT;
+}
+
 
 static int ch13726a_on(struct ch13726a_panel *ctx)
 {
@@ -63,12 +96,22 @@ static int ch13726a_on(struct ch13726a_panel *ctx)
 
 	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	// mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
-	// mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xb9, 0x00);
-    mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, MIPI_DCS_NOP);
-    mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_EXIT_SLEEP_MODE, MIPI_DCS_NOP);
+	// // mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
+	// // mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xb9, 0x00);
+    // mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, MIPI_DCS_NOP);
+    // mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_EXIT_SLEEP_MODE, MIPI_DCS_NOP);
+
+	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
+	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xb9, 0x11);
+
+	mipi_dsi_dcs_set_pixel_format_multi(&dsi_ctx, 0x77);
+	mipi_dsi_dcs_set_column_address_multi(&dsi_ctx, 0x0000, 0x0437);
+	mipi_dsi_dcs_set_page_address_multi(&dsi_ctx, 0x0000, 0x04d7);
 
 	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
+
+	mipi_dsi_msleep(&dsi_ctx, 120);
+	mipi_dsi_dcs_set_tear_on_multi(&dsi_ctx, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
 
 	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
 
@@ -93,7 +136,7 @@ static int ch13726a_prepare(struct drm_panel *panel)
 {
 	struct ch13726a_panel *ctx = to_ch13726a_panel(panel);
 	struct device *dev = &ctx->dsi->dev;
-	int ret;
+	int ret, attempt;
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(ch13726a_supplies), ctx->supplies);
 	if (ret < 0) {
@@ -101,19 +144,34 @@ static int ch13726a_prepare(struct drm_panel *panel)
 		return ret;
 	}
 
-	ch13726a_reset(ctx);
+	msleep(80);
 
-	ret = ch13726a_on(ctx);
-	if (ret < 0) {
-		dev_err(dev, "Failed to initialize panel: %d\n", ret);
-		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-		regulator_bulk_disable(ARRAY_SIZE(ch13726a_supplies), ctx->supplies);
-		return ret;
-	}
+	for (attempt = 0; attempt < 3; attempt++) {
+		ch13726a_reset(ctx);
 
-	msleep(28);
+		ret = ch13726a_on(ctx);
+		if (ret < 0) {
+			dev_warn(dev, "panel init attempt %d failed: %d\n",
+				 attempt, ret);
+			msleep(20);
+			continue;
+		}
 
-	return 0;
+		msleep(28);
+
+		if (ch13726a_wait_ready(ctx) == 0)
+			return 0;
+
+		dev_warn(dev, "panel init attempt %d unverified, retrying\n",
+			 attempt);
+		msleep(20);
+ 	}
+	
+
+	dev_err(dev, "panel failed to initialize after retries\n");
+	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+	regulator_bulk_disable(ARRAY_SIZE(ch13726a_supplies), ctx->supplies);
+	return -EIO;
 }
 
 static int ch13726a_unprepare(struct drm_panel *panel)
@@ -305,8 +363,7 @@ static int ch13726a_probe(struct mipi_dsi_device *dsi)
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
-	dsi->mode_flags = MIPI_DSI_MODE_VIDEO |
-			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
+	dsi->mode_flags = MIPI_DSI_MODE_LPM;
 
 	ctx->panel.prepare_prev_first = true;
 

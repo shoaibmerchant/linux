@@ -123,6 +123,7 @@ struct samsung_dsim {
 	int state;
 	struct drm_property *brightness;
 	struct completion completed;
+	u32 cmd_frame_count;
 
 	spinlock_t transfer_lock; /* protects transfer_list */
 	struct list_head transfer_list;
