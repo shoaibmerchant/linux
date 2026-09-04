@@ -63,14 +63,34 @@ static int ch13726a_on(struct ch13726a_panel *ctx)
 
 	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	// mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
-	// mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xb9, 0x00);
-    mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, MIPI_DCS_NOP);
-    mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_EXIT_SLEEP_MODE, MIPI_DCS_NOP);
+	/* Vendor unlock */
+	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
+	/* Vendor command mode enable */
+	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xb9, 0x11);
+
+	/* Full-frame update region */
+	mipi_dsi_dcs_set_column_address_multi(&dsi_ctx, 0, 1079);
+	mipi_dsi_dcs_set_page_address_multi(&dsi_ctx, 0, 1239);
+
+	/* Enable TE output */
+	mipi_dsi_dcs_set_tear_on_multi(&dsi_ctx, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
+
+	/* WRCTRLD */
+	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x00);
+
+    // mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, MIPI_DCS_NOP);
+    // mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_EXIT_SLEEP_MODE, MIPI_DCS_NOP);
 
 	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
+	mipi_dsi_msleep(&dsi_ctx, 120);
 
+	/* Display ON */
 	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
+	mipi_dsi_msleep(&dsi_ctx, 20);
+
+	dev_info(&ctx->dsi->dev,
+		 "command-mode init ret=%d\n",
+		 dsi_ctx.accum_err);
 
 	return dsi_ctx.accum_err;
 }
@@ -305,8 +325,7 @@ static int ch13726a_probe(struct mipi_dsi_device *dsi)
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
-	dsi->mode_flags = MIPI_DSI_MODE_VIDEO |
-			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
+	dsi->mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS;
 
 	ctx->panel.prepare_prev_first = true;
 
