@@ -1899,7 +1899,15 @@ static int samsung_dsim_register_te_irq(struct samsung_dsim *dsi, struct device 
 	else if (IS_ERR(dsi->te_gpio))
 		return dev_err_probe(dev, PTR_ERR(dsi->te_gpio), "failed to get te GPIO\n");
 
+	dev_info(dsi->dev, "Entered register_te_gpio\n");
+	dev_info(dev, "OF node = %pOF\n", dev->of_node);
+
 	te_gpio_irq = gpiod_to_irq(dsi->te_gpio);
+
+	dev_info(dev,
+		"TE GPIO found, irq=%d value=%d\n",
+		te_gpio_irq,
+		gpiod_get_value_cansleep(dsi->te_gpio));
 
 	ret = request_threaded_irq(te_gpio_irq, samsung_dsim_te_irq_handler, NULL,
 				   IRQF_TRIGGER_RISING | IRQF_NO_AUTOEN, "TE", dsi);
@@ -1992,16 +2000,11 @@ of_find_panel_or_bridge:
 	drm_bridge_add(&dsi->bridge);
 
 	/*
-	 * This is a temporary solution and should be made by more generic way.
-	 *
-	 * If attached panel device is for command mode one, dsi should register
-	 * TE interrupt handler.
-	 */
-	if (!(device->mode_flags & MIPI_DSI_MODE_VIDEO)) {
-		ret = samsung_dsim_register_te_irq(dsi, &device->dev);
+	 * Allow TE IRQ for video mode also, if DT specifies it
+	*/
+	ret = samsung_dsim_register_te_irq(dsi, &device->dev);
 		if (ret)
 			goto err_remove_bridge;
-	}
 
 	// The next bridge can be used by host_ops->attach
 	dsi->bridge.next_bridge = drm_bridge_get(next_bridge);

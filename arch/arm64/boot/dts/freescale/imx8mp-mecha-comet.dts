@@ -935,6 +935,7 @@
 		reg = <0>;
 		pinctrl-0 = <&pinctrl_mipi_gpio>;
 		reset-gpios = <&gpio4 9 GPIO_ACTIVE_LOW>;
+		te-gpios = <&gpio4 8 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 
 		port {
@@ -1255,7 +1256,8 @@
 	};
 
 	pinctrl_mipi_gpio: mipigpiogrp {
-		fsl,pins = <MX8MP_IOMUXC_SAI1_RXD7__GPIO4_IO09 0x184>;
+		fsl,pins = <MX8MP_IOMUXC_SAI1_RXD7__GPIO4_IO09 0x184
+			    MX8MP_IOMUXC_SAI1_RXD6__GPIO4_IO08 0x19>;
 	};
 
 	pinctrl_touch_i2c: touchgrp {

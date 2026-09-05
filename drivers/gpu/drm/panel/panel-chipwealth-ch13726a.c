@@ -63,12 +63,17 @@ static int ch13726a_on(struct ch13726a_panel *ctx)
 
 	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	// mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
+	mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xf0, 0x50);
 	// mipi_dsi_generic_write_seq_multi(&dsi_ctx, 0xb9, 0x00);
+
     mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, MIPI_DCS_NOP);
     mipi_dsi_generic_write_seq_multi(&dsi_ctx, MIPI_DCS_EXIT_SLEEP_MODE, MIPI_DCS_NOP);
 
 	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
+	mipi_dsi_msleep(&dsi_ctx, 120);
+
+
+	mipi_dsi_dcs_set_tear_on_multi(&dsi_ctx, MIPI_DSI_DCS_TEAR_MODE_VBLANK); 
 
 	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
 
