@@ -29,6 +29,11 @@ struct lcdif_drm_private {
 		/* i.MXRT does support overlay planes, add them here. */
 	} planes;
 	struct drm_crtc			crtc;
+
+	/* Framebuffer address held in panel GRAM across self-refresh, used to
+	 * scan a content-matching first frame on exit so the (unavoidable)
+	 * scan restart is invisible. */
+	dma_addr_t			sr_fb_addr;
 };
 
 static inline struct lcdif_drm_private *

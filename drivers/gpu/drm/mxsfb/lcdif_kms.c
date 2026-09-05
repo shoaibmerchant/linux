@@ -559,7 +559,11 @@ static void lcdif_crtc_atomic_enable(struct drm_crtc *crtc,
 
 	struct drm_display_mode *m = &lcdif->crtc.state->adjusted_mode;
 	struct drm_device *drm = lcdif->drm;
+	struct drm_crtc_state *old_cstate = drm_atomic_get_old_crtc_state(state, crtc);
+	bool exiting_self_refresh = old_cstate && old_cstate->self_refresh_active;
 	dma_addr_t paddr;
+	dma_addr_t first_addr;
+	int ret;
 
 	clk_set_rate(lcdif->clk, m->clock * 1000);
 
@@ -567,15 +571,65 @@ static void lcdif_crtc_atomic_enable(struct drm_crtc *crtc,
 
 	lcdif_crtc_mode_set_nofb(new_cstate, new_pstate);
 
-	/* Write cur_buf as well to avoid an initial corrupt frame */
 	paddr = drm_fb_dma_get_gem_addr(new_pstate->fb, new_pstate, 0);
-	if (paddr) {
+
+	/*
+	 * Tear-free self-refresh exit via content matching.
+	 *
+	 * The LCDIFv3 scan restart (reset_block + reprogram in mode_set_nofb
+	 * above, then enable) unavoidably cold-starts a fresh scan, which sweeps
+	 * the new frame over the old GRAM content -> visible right-to-left tear.
+	 * Make that first restart frame IDENTICAL to what the panel already holds
+	 * in GRAM (stashed on entry), so the sweep is invisible; the compositor's
+	 * new frame then lands cleanly on the next vblank via the normal
+	 * atomic_flush shadow-load path.
+	 */
+	first_addr = exiting_self_refresh && lcdif->sr_fb_addr ?
+		     lcdif->sr_fb_addr : paddr;
+
+	if (first_addr) {
+		writel(lower_32_bits(first_addr),
+		       lcdif->base + LCDC_V8_CTRLDESCL_LOW0_4);
+		writel(CTRLDESCL_HIGH0_4_ADDR_HIGH(upper_32_bits(first_addr)),
+		       lcdif->base + LCDC_V8_CTRLDESCL_HIGH0_4);
+	}
+	lcdif_enable_controller(lcdif);
+
+	/*
+	 * If we restarted scanning the old (GRAM) frame to hide the cold-start,
+	 * let it display for one full frame, THEN arm the new framebuffer via
+	 * the shadow so it is revealed atomically on the following vblank.
+	 *
+	 * Without the one-frame wait the new frame's SHADOW_LOAD_EN latches on
+	 * the very first VSYNC after restart - i.e. the same frame the restart
+	 * produces - so the old content is never actually shown and the tear
+	 * returns. Poll the hardware VS_BLANK once to wait out that first frame.
+	 */
+	if (exiting_self_refresh && lcdif->sr_fb_addr && paddr &&
+	    paddr != first_addr) {
+		u32 reg;
+
+		/* Wait for one frame boundary so the old (matching) frame is shown. */
+		writel(INT_STATUS_D0_VS_BLANK,
+		       lcdif->base + LCDC_V8_INT_STATUS_D0);
+		ret = readl_poll_timeout_atomic(lcdif->base + LCDC_V8_INT_STATUS_D0,
+						reg, reg & INT_STATUS_D0_VS_BLANK,
+						10, 30000);
+		if (ret)
+			drm_warn(drm, "SR-exit: VS_BLANK wait timed out\n");
+
+		/* Now present the real new frame, revealed atomically next vblank. */
 		writel(lower_32_bits(paddr),
 		       lcdif->base + LCDC_V8_CTRLDESCL_LOW0_4);
 		writel(CTRLDESCL_HIGH0_4_ADDR_HIGH(upper_32_bits(paddr)),
 		       lcdif->base + LCDC_V8_CTRLDESCL_HIGH0_4);
+
+		reg = readl(lcdif->base + LCDC_V8_CTRLDESCL0_5);
+		reg |= CTRLDESCL0_5_SHADOW_LOAD_EN;
+		writel(reg, lcdif->base + LCDC_V8_CTRLDESCL0_5);
 	}
-	lcdif_enable_controller(lcdif);
+
+	lcdif->sr_fb_addr = 0;
 
 	drm_crtc_vblank_on(crtc);
 }
@@ -587,8 +641,25 @@ static void lcdif_crtc_atomic_disable(struct drm_crtc *crtc,
 	struct drm_device *drm = lcdif->drm;
 	struct drm_crtc_state *old_cstate =
 		drm_atomic_get_old_crtc_state(state, crtc);
+	struct drm_crtc_state *new_cstate =
+		drm_atomic_get_new_crtc_state(state, crtc);
 	bool from_self_refresh = old_cstate && old_cstate->self_refresh_active;
+	bool entering_self_refresh = new_cstate && new_cstate->self_refresh_active;
 	struct drm_pending_vblank_event *event;
+
+	if (entering_self_refresh) {
+		/*
+		 * Remember the framebuffer that is being held in panel GRAM across
+		 * self-refresh. On exit we scan this same content for the first
+		 * frame so the unavoidable LCDIFv3 scan restart (reset + reprogram)
+		 * is invisible - identical content, no right-to-left sweep - and the
+		 * compositor's new frame then lands cleanly on the following vblank.
+		 */
+		struct drm_plane_state *ps = crtc->primary->state;
+
+		if (ps && ps->fb)
+			lcdif->sr_fb_addr = drm_fb_dma_get_gem_addr(ps->fb, ps, 0);
+	}
 
 	/* When transitionning from disable state, LCDIFv3 is already suspended,
 	 * wake it up, it will be suspended back on this function's exit

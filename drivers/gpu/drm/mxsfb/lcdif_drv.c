@@ -221,6 +221,21 @@ static int lcdif_load(struct drm_device *drm)
 
 	pm_runtime_enable(drm->dev);
 
+	/*
+	 * Goal 1 (robust): forbid runtime autosuspend so LCDIFv3 stays clocked
+	 * whenever the CRTC is enabled, including across panel self-refresh. The
+	 * per-commit reference from drm_atomic_helper_commit_tail_rpm would
+	 * otherwise let the device autosuspend during the self-refresh idle
+	 * period, gating clocks and losing register state.
+	 *
+	 * This is a boolean gate (power.runtime_auto=0), so unlike a per-cycle
+	 * pm_runtime_get/put pair it cannot drift out of balance under rapid
+	 * self-refresh cycling. DDR read traffic is still stopped during
+	 * self-refresh because the scanout DMA (CTRLDESCL0_5[EN]) is cleared on
+	 * self-refresh entry; only the LCDIF clocks stay on.
+	 */
+	pm_runtime_forbid(drm->dev);
+
 	return 0;
 }
 
